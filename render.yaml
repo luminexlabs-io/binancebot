@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: binance-square-autoposter
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: BINANCE_SQUARE_OPENAPI_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: POST_SCHEDULE_CRON
+        value: "0 * * * *"
+      - key: POST_TIMEZONE
+        value: "UTC"
+      - key: DRY_RUN
+        value: "false"

@@ -1,0 +1,21 @@
+{
+  "name": "binance-square-autoposter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fully automatic AI bot: posts crypto market analysis with images to Binance Square every hour. Built for Render.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "once": "node -e \"process.env.RUN_ONCE='1';process.env.DRY_RUN='true';require('./src/index.js')\"",
+    "once:upload": "node -e \"process.env.RUN_ONCE='1';process.env.DRY_RUN='upload';require('./src/index.js')\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3"
+  }
+}

@@ -1,0 +1,34 @@
+# Keeps a Render free-tier web service awake 24/7 by pinging it every
+# 10 minutes (Render sleeps services after 15 minutes of inactivity).
+#
+# One-time setup after deploying to Render:
+#   Repo -> Settings -> Secrets and variables -> Actions -> Variables ->
+#   New repository variable:  name=RENDER_URL  value=https://YOUR-APP.onrender.com
+# Test it anytime with the "Run workflow" button on the Actions tab.
+name: keep-alive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render health endpoint
+        env:
+          RENDER_URL: ${{ vars.RENDER_URL }}
+        run: |
+          if [ -z "$RENDER_URL" ]; then
+            echo "::error::RENDER_URL repository variable is not set."
+            echo "Add it under Settings -> Secrets and variables -> Actions -> Variables."
+            exit 1
+          fi
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "$RENDER_URL/healthz")
+          echo "GET $RENDER_URL/healthz -> HTTP $code (cold starts can take ~60s, that is fine)"
+          [ "$code" = "200" ] || exit 1
