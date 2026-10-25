@@ -4,13 +4,20 @@ const os = require('os');
 const path = require('path');
 const { log, error } = require('./logger');
 const { getMarketSnapshot } = require('./market');
-const { generatePost } = require('./content');
+const { getTrends } = require('./trends');
+const { generateViralPost } = require('./agents');
 const { renderPostImages } = require('./image');
 const square = require('./square');
 
 // Survives service restarts within the same instance (Render /tmp); used by
 // the min-gap guard so a wake-from-sleep can't double-post.
 const GAP_FILE = path.join(os.tmpdir(), 'bsap-last-post.json');
+// Post history for topic rotation + the status page. Same ephemeral disk, so
+// on a fresh instance it starts empty (the bot then simply has no recent
+// topics to avoid - acceptable degradation).
+const HISTORY_FILE = path.join(os.tmpdir(), 'bsap-history.json');
+const HISTORY_MAX = 50;
+const REPEAT_BLOCK_HOURS = 12;
 
 function loadLastSuccessAt() {
   try {
@@ -29,27 +36,67 @@ function saveLastSuccessAt(iso) {
   }
 }
 
+function loadHistory() {
+  try {
+    const arr = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')).posts;
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePostHistory(entry) {
+  try {
+    const posts = [...loadHistory(), entry].slice(-HISTORY_MAX);
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify({ posts }));
+  } catch {
+    /* ephemeral disk - non-fatal */
+  }
+}
+
+// Topics posted recently, so the editor agent rotates instead of repeating.
+function recentTopics() {
+  const cutoff = Date.now() - REPEAT_BLOCK_HOURS * 3600 * 1000;
+  return loadHistory()
+    .filter((p) => Date.parse(p.at) > cutoff)
+    .map((p) => p.topic)
+    .filter(Boolean);
+}
+
 const state = {
   startedAt: Date.now(),
   totalPosts: 0,
   lastRun: null,
   lastSuccessAt: loadLastSuccessAt(),
+  lastPostMeta: null,
+  trendsAt: null,
 };
 
 async function runCycle(config) {
   const startedAt = new Date();
   log('=== posting cycle start ===');
   try {
-    const snap = await getMarketSnapshot(config.symbols, config.mainSymbol);
+    const [snap, trends] = await Promise.all([
+      getMarketSnapshot(config.symbols, config.mainSymbol),
+      getTrends(config),
+    ]);
+    state.trendsAt = trends.fetchedAt;
+    log(
+      `trends: sources [${trends.sources.join(', ') || 'none'}] - ` +
+        `${trends.trending.length} trending, F&G ${trends.fearGreed ? trends.fearGreed.value : 'n/a'}, ` +
+        `${trends.news.length} headlines`
+    );
     log(`market: got ${snap.klines.length} candles + ${snap.tickers.length} tickers`);
 
-    const post = await generatePost(snap, config);
-    const images = await renderPostImages(snap);
+    const viral = await generateViralPost(snap, trends, recentTopics(), config);
+    log(`agents: draft ready (score ${viral.meta.score ?? 'n/a'}, via ${viral.meta.provider})`);
+
+    const images = await renderPostImages(snap, viral.spotlightSnap);
     log(`images: rendered ${images.length} image(s) [${images.map((i) => i.name).join(', ')}]`);
 
     if (config.dryRunMode === 'true') {
-      log(`DRY RUN - would publish: "${post.title}"`);
-      log(`DRY RUN - post body:\n${post.content}`);
+      log(`DRY RUN - would publish: "${viral.title}"`);
+      log(`DRY RUN - post body:\n${viral.content}`);
       log(`DRY RUN - image file(s): ${images.map((i) => i.path).join(', ')}`);
       state.lastRun = { at: startedAt.toISOString(), status: 'dry-run', detail: 'generated locally, published nothing' };
       return { ok: true, dryRun: true };
@@ -57,6 +104,24 @@ async function runCycle(config) {
 
     if (!config.squareApiKey) {
       throw new Error('BINANCE_SQUARE_OPENAPI_KEY is not configured - cannot publish');
+    }
+
+    // Quality gate: below-threshold drafts are skipped while the account has
+    // posted recently. After gateGraceHours of silence, post the best
+    // available draft anyway - an idle account is worse than an imperfect one.
+    if (config.dryRunMode === 'false' && viral.meta.score !== null && viral.meta.score < config.critic.minScore) {
+      const hoursSince = state.lastSuccessAt ? (Date.now() - state.lastSuccessAt) / 3600000 : Infinity;
+      if (hoursSince < config.gateGraceHours) {
+        log(`scheduler: quality gate - score ${viral.meta.score} < ${config.critic.minScore}, last post ${hoursSince.toFixed(1)}h ago; skipping this hour`);
+        state.lastRun = {
+          at: startedAt.toISOString(),
+          status: 'quality-skip',
+          score: viral.meta.score,
+          topic: viral.meta.strategy.topic,
+        };
+        return { ok: true, skipped: 'quality' };
+      }
+      log(`scheduler: score ${viral.meta.score} below threshold but account silent ${hoursSince.toFixed(1)}h - posting best draft`);
     }
 
     const imageUrls = [];
@@ -67,24 +132,36 @@ async function runCycle(config) {
     }
 
     if (config.dryRunMode === 'upload') {
-      log(`DRY RUN (upload) - images uploaded OK; publish skipped. Would post: "${post.title}"`);
+      log(`DRY RUN (upload) - images uploaded OK; publish skipped. Would post: "${viral.title}"`);
       state.lastRun = { at: startedAt.toISOString(), status: 'dry-run-upload', detail: `${imageUrls.length} image(s) uploaded, publish skipped` };
       return { ok: true, dryRun: true };
     }
 
     const result = await square.publishPost(config.squareApiKey, {
-      text: post.content,
+      text: viral.content,
       imageUrls,
     });
     state.totalPosts += 1;
     state.lastSuccessAt = Date.now();
     saveLastSuccessAt(new Date().toISOString());
+    state.lastPostMeta = {
+      topic: viral.meta.strategy.topic,
+      symbol: viral.meta.strategy.symbol,
+      format: viral.meta.strategy.format,
+      score: viral.meta.score,
+      provider: viral.meta.provider,
+      postId: result.id,
+      at: new Date().toISOString(),
+    };
+    savePostHistory({ ...state.lastPostMeta, title: viral.title });
     state.lastRun = {
       at: startedAt.toISOString(),
       status: 'success',
       postId: result.id,
       link: result.link,
       images: imageUrls.length,
+      topic: viral.meta.strategy.topic,
+      score: viral.meta.score,
     };
     log(`square: POSTED ${result.link || '(no link returned)'} with ${imageUrls.length} image(s)`);
     log('=== posting cycle success ===');

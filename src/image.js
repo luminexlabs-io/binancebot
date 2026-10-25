@@ -272,16 +272,18 @@ async function renderMoversChart(snap) {
   return canvas.toBuffer('image/png');
 }
 
-async function renderPostImages(snap) {
+async function renderPostImages(snap, extraSnap = null) {
   const stamp = Date.now();
   const out = [];
   const charts = [
-    { render: renderPriceChart, tag: 'chart' },
-    { render: renderMoversChart, tag: 'movers' },
+    { render: renderPriceChart, tag: 'chart', snap },
+    { render: renderMoversChart, tag: 'movers', snap },
   ];
-  for (const { render, tag } of charts) {
+  // Spotlight chart for the editor's picked coin (pre-fetched mini snapshot).
+  if (extraSnap) charts.push({ render: renderPriceChart, tag: 'spotlight', snap: extraSnap });
+  for (const { render, tag, snap: s } of charts) {
     try {
-      const buffer = await render(snap);
+      const buffer = await render(s);
       const name = `square-${tag}-${stamp}.png`;
       const p = path.join(os.tmpdir(), name);
       fs.writeFileSync(p, buffer);

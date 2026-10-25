@@ -1,11 +1,14 @@
 # Binance Square Autoposter
 
-Fully automatic AI bot. Every hour it:
+Fully automatic AI bot. Every hour a **4-stage agent pipeline** runs:
 
-1. Pulls live market data from Binance (BTC, ETH, SOL, BNB, XRP).
-2. Writes a fresh post with AI (Groq, with OpenRouter and Gemini as fallbacks).
-3. Renders two chart images (1h candlestick chart + 24h movers).
-4. Uploads the images and **publishes the post to Binance Square** (with images, always).
+1. **Scout** — pulls live Binance market data (BTC, ETH, SOL, BNB, XRP) plus trend signals: CoinGecko trending coins, the crypto Fear & Greed Index, top 24h gainers/losers/volume across all liquid USDT pairs, and (optional) CryptoPanic news headlines.
+2. **Editor agent** — decides this hour's play as structured JSON: which coin, which angle, which format (market recap / trending spotlight / sentiment take / education / question), and a hook — never repeating a topic used in the last 12 hours.
+3. **Writer agent** — turns the strategy into a viral-style post: number-led hook first line, plain text, closing question CTA, Binance-format hashtags. Title ≤70 chars and body 350–800 chars are enforced in code.
+4. **Critic agent** — scores the draft 1–10 on hook, specificity, emotion and CTA. Below-threshold drafts get rewritten once; if they still score low, the hour is skipped (unless the account has been silent > `GATE_GRACE_HOURS` — then the best draft goes out anyway).
+5. Renders 2–3 chart images (1h candlestick, 24h movers, plus a spotlight chart when the editor picked a Binance-listed trending coin), uploads them, and **publishes to Binance Square**.
+
+AI providers are tried in order (Groq → OpenRouter → Gemini); every trend source and every agent degrades gracefully, so a failing dependency never stops the bot.
 
 Runs headless on Render — no UI, no interaction needed. Health/status is served on `/`.
 
@@ -55,6 +58,10 @@ Check one of the generated PNGs to see exactly what gets attached to each post.
 | `POST_SCHEDULE_CRON` | Posting schedule, default `0 * * * *` (hourly, UTC). |
 | `POST_SYMBOLS` / `MAIN_SYMBOL` | Coins tracked in every post / coin for the main chart. |
 | `DRY_RUN` | `false` = post for real. `true` = generate only. `upload` = upload images but skip publishing. |
+| `CRYPTOPANIC_API_KEY` | Optional free token from [cryptopanic.com/developers/api](https://cryptopanic.com/developers/api/) — adds hot news headlines to the scout. Works without it. |
+| `CRITIC_ENABLED` / `CRITIC_MIN_SCORE` | Quality gate. `true` / `7` = drafts scoring below 7 are rewritten, then skipped while the account posts regularly. |
+| `GATE_GRACE_HOURS` | After this many hours without a successful post, a below-threshold draft is published anyway (default 4 — an idle account is worse than an imperfect post). |
+| `SPOTLIGHT_CHART` | `true` (default) renders a third candlestick chart for the coin the editor spotlights. |
 
 ## API used
 
@@ -65,4 +72,8 @@ Limits: 100 posts/day, 400 uploads/day — an hourly cadence uses 24/48, well wi
 
 ## Status endpoint
 
-`GET /` returns JSON: last run result, post link, total posts, next scheduled run. `GET /healthz` for uptime pings.
+`GET /` returns JSON: last run result, post link, total posts, next scheduled run, plus `lastPost` (topic, format, critic score, provider, post ID) and `trendsAt` (when trend data was last gathered). `GET /healthz` for uptime pings.
+
+## Honest limits
+
+Binance Square exposes no engagement-metrics API, so the bot can't learn from likes/views directly — quality control is the critic agent plus topic rotation from post history. No engagement-bait or spam tactics: the reach lever is content quality.

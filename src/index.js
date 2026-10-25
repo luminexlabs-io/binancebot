@@ -14,6 +14,8 @@ app.get('/', (req, res) => {
     nextRunAt: scheduler.nextRunAt(config),
     totalPosts: scheduler.state.totalPosts,
     lastRun: scheduler.state.lastRun,
+    lastPost: scheduler.state.lastPostMeta,
+    trendsAt: scheduler.state.trendsAt,
     uptimeSec: Math.round((Date.now() - scheduler.state.startedAt) / 1000),
   });
 });

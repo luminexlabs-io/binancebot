@@ -17,6 +17,16 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: CRYPTOPANIC_API_KEY
+        sync: false
+      - key: CRITIC_ENABLED
+        value: "true"
+      - key: CRITIC_MIN_SCORE
+        value: "7"
+      - key: GATE_GRACE_HOURS
+        value: "4"
+      - key: SPOTLIGHT_CHART
+        value: "true"
       - key: POST_SCHEDULE_CRON
         value: "0 * * * *"
       - key: POST_TIMEZONE

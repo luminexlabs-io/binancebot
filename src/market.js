@@ -61,4 +61,4 @@ async function getMarketSnapshot(symbols, mainSymbol) {
   return { mainSymbol, interval: '1h', klines, tickers, fetchedAt: new Date().toISOString() };
 }
 
-module.exports = { getMarketSnapshot };
+module.exports = { getMarketSnapshot, getKlines, get24h, getJson };

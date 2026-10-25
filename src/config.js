@@ -1,5 +1,10 @@
 require('dotenv').config();
 
+function envBool(v, dflt) {
+  const s = String(v ?? (dflt ? 'true' : 'false')).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(s);
+}
+
 const config = {
   port: Number(process.env.PORT || 3000),
   scheduleCron: process.env.POST_SCHEDULE_CRON || '0 * * * *',
@@ -10,6 +15,13 @@ const config = {
     .filter(Boolean),
   mainSymbol: (process.env.MAIN_SYMBOL || 'BTCUSDT').toUpperCase(),
   squareApiKey: process.env.BINANCE_SQUARE_OPENAPI_KEY || process.env.BINANCE_API_KEY || '',
+  cryptoPanicKey: process.env.CRYPTOPANIC_API_KEY || '',
+  critic: {
+    enabled: envBool(process.env.CRITIC_ENABLED, true),
+    minScore: Number(process.env.CRITIC_MIN_SCORE || 7),
+  },
+  gateGraceHours: Number(process.env.GATE_GRACE_HOURS || 4),
+  spotlightChart: envBool(process.env.SPOTLIGHT_CHART, true),
   groq: {
     key: process.env.GROQ_API_KEY || '',
     model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',

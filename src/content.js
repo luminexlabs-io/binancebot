@@ -44,14 +44,15 @@ async function postJson(url, headers, body, timeoutMs = 45000) {
   return res.json();
 }
 
-async function callOpenAICompatible(url, headers, cfg, prompt) {
+// payload = { system, user, temperature }
+async function callOpenAICompatible(url, headers, cfg, payload) {
   const json = await postJson(url, headers, {
     model: cfg.model,
-    temperature: 0.85,
+    temperature: payload.temperature ?? 0.85,
     response_format: { type: 'json_object' },
     messages: [
-      { role: 'system', content: SYSTEM },
-      { role: 'user', content: prompt },
+      { role: 'system', content: payload.system },
+      { role: 'user', content: payload.user },
     ],
   });
   const text = json.choices?.[0]?.message?.content;
@@ -59,16 +60,16 @@ async function callOpenAICompatible(url, headers, cfg, prompt) {
   return text;
 }
 
-async function generateWithGroq(prompt, cfg) {
+async function generateWithGroq(payload, cfg) {
   return callOpenAICompatible(
     'https://api.groq.com/openai/v1/chat/completions',
     { Authorization: `Bearer ${cfg.key}` },
     cfg,
-    prompt
+    payload
   );
 }
 
-async function generateWithOpenRouter(prompt, cfg) {
+async function generateWithOpenRouter(payload, cfg) {
   return callOpenAICompatible(
     'https://openrouter.ai/api/v1/chat/completions',
     {
@@ -77,11 +78,11 @@ async function generateWithOpenRouter(prompt, cfg) {
       'X-Title': 'binance-square-autoposter',
     },
     cfg,
-    prompt
+    payload
   );
 }
 
-async function generateWithGemini(prompt, cfg) {
+async function generateWithGemini(payload, cfg) {
   // AIza... keys go in the query string; OAuth-style tokens (AQ....) as Bearer.
   const isApiKey = cfg.key.startsWith('AIza');
   const url =
@@ -90,8 +91,8 @@ async function generateWithGemini(prompt, cfg) {
   const headers = {};
   if (!isApiKey) headers.Authorization = `Bearer ${cfg.key}`;
   const json = await postJson(url, headers, {
-    contents: [{ role: 'user', parts: [{ text: SYSTEM + '\n\n' + prompt }] }],
-    generationConfig: { temperature: 0.85, responseMimeType: 'application/json' },
+    contents: [{ role: 'user', parts: [{ text: payload.system + '\n\n' + payload.user }] }],
+    generationConfig: { temperature: payload.temperature ?? 0.85, responseMimeType: 'application/json' },
   });
   const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text).join('');
   if (!text) throw new Error('empty completion');
@@ -101,9 +102,37 @@ async function generateWithGemini(prompt, cfg) {
 function parseJsonLoose(text) {
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('no JSON found in model output');
-  const obj = JSON.parse(m[0]);
-  if (!obj.content) throw new Error('missing "content" field');
-  return { title: String(obj.title || '').trim(), content: String(obj.content).trim() };
+  return JSON.parse(m[0]);
+}
+
+// Runs one agent prompt across the provider fallback chain. `validate(rawText)`
+// must return the parsed value or throw; a failed validation retries the same
+// provider once with the error appended as a correction, then moves on.
+async function runProviderChain(config, { system, user, temperature = 0.85, validate, retriesPerProvider = 1 }) {
+  const providers = [
+    ['groq', generateWithGroq, config.groq],
+    ['openrouter', generateWithOpenRouter, config.openrouter],
+    ['gemini', generateWithGemini, config.gemini],
+  ];
+  for (const [name, fn, cfg] of providers) {
+    if (!cfg.key) continue;
+    let userMsg = user;
+    for (let attempt = 0; attempt <= retriesPerProvider; attempt++) {
+      try {
+        const value = validate
+          ? validate(await fn({ system, user: userMsg, temperature }, cfg))
+          : await fn({ system, user: userMsg, temperature }, cfg);
+        log(`llm: ${name} accepted (attempt ${attempt + 1})`);
+        return { value, provider: name };
+      } catch (err) {
+        warn(`llm: ${name} attempt ${attempt + 1} failed: ${err.message}`);
+        if (attempt < retriesPerProvider) {
+          userMsg = `${user}\n\nYour previous reply failed: ${err.message}. Reply again with corrected minified JSON only.`;
+        }
+      }
+    }
+  }
+  throw new Error('all AI providers failed');
 }
 
 function templateContent(snap) {
@@ -133,23 +162,22 @@ async function generatePost(snap, config) {
     `Write a Binance Square post from this live Binance spot data. ` +
     `Angle for this hour: ${angle}. Data: ${snapshotForPrompt(snap)}`;
 
-  const providers = [
-    ['groq', generateWithGroq, config.groq],
-    ['openrouter', generateWithOpenRouter, config.openrouter],
-    ['gemini', generateWithGemini, config.gemini],
-  ];
-  for (const [name, fn, cfg] of providers) {
-    if (!cfg.key) continue;
-    try {
-      const parsed = parseJsonLoose(await fn(prompt, cfg));
-      log(`content: generated via ${name} (title ${parsed.title.length} chars, body ${parsed.content.length} chars)`);
-      return parsed;
-    } catch (err) {
-      warn(`content: provider ${name} failed: ${err.message}`);
-    }
+  try {
+    const { value } = await runProviderChain(config, {
+      system: SYSTEM,
+      user: prompt,
+      temperature: 0.85,
+      validate: (raw) => {
+        const obj = parseJsonLoose(raw);
+        if (!obj.content) throw new Error('missing "content" field');
+        return { title: String(obj.title || '').trim(), content: String(obj.content).trim() };
+      },
+    });
+    return value;
+  } catch (err) {
+    warn(`content: ${err.message}, using built-in template`);
+    return templateContent(snap);
   }
-  warn('content: all AI providers failed, using built-in template');
-  return templateContent(snap);
 }
 
-module.exports = { generatePost, templateContent };
+module.exports = { generatePost, templateContent, runProviderChain, parseJsonLoose, snapshotForPrompt };
