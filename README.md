@@ -6,7 +6,7 @@ Fully automatic AI bot. Every hour a **4-stage agent pipeline** runs:
 2. **Editor agent** — decides this hour's play as structured JSON: which coin, which angle, which format (market recap / trending spotlight / sentiment take / education / question), and a hook — never repeating a topic used in the last 12 hours.
 3. **Writer agent** — turns the strategy into a viral-style post: number-led hook first line, plain text, closing question CTA, Binance-format hashtags. Title ≤70 chars and body 350–800 chars are enforced in code.
 4. **Critic agent** — scores the draft 1–10 on hook, specificity, emotion and CTA. Below-threshold drafts get rewritten once; if they still score low, the hour is skipped (unless the account has been silent > `GATE_GRACE_HOURS` — then the best draft goes out anyway).
-5. Renders 2–3 chart images (1h candlestick, 24h movers, plus a spotlight chart when the editor picked a Binance-listed trending coin), uploads them, and **publishes to Binance Square**.
+5. Renders 2 chart images that **rotate every hour** so consecutive posts never look alike: a lead candlestick chart (the spotlight coin when the editor picked one, otherwise a rotating major), then either the 24h movers board or a Fear & Greed gauge — across 3 rotating color themes — uploads them, and **publishes to Binance Square**.
 
 AI providers are tried in order (Groq → OpenRouter → Gemini); every trend source and every agent degrades gracefully, so a failing dependency never stops the bot.
 
@@ -22,22 +22,19 @@ Runs headless on Render — no UI, no interaction needed. Health/status is serve
 
 ## Keeping Render awake 24/7 (free)
 
-Render's **free plan sleeps a service after ~15 minutes without inbound traffic**, which would pause the hourly posting. Nothing running inside the app can prevent this (a sleeping process can't ping itself) — the fix is an external ping so Render never reaches its idle timeout.
+Render's **free plan sleeps a service after ~15 minutes without inbound traffic**, which pauses the hourly posting. Two independent layers keep it running:
 
-**Option A — GitHub Actions (already included, no extra account)**
-1. Push this repo to GitHub and deploy on Render.
-2. Repo → **Settings → Secrets and variables → Actions → Variables → New repository variable**: name `RENDER_URL`, value `https://YOUR-APP.onrender.com`.
-3. The included `.github/workflows/keep-alive.yml` runs once every 4 hours and its job pings `/healthz` every 9 minutes for ~3h45m, so coverage is continuous. Low-frequency GitHub schedules run reliably; high-frequency ones (like `*/10`) get silently dropped by GitHub's scheduler — which is exactly why the bot once went dark. Each ping also doubles as a posting check server-side (min-gap guarded): if the service slept through a cron slot, the first ping after waking posts the catch-up. Test the workflow with the "Run workflow" button on the Actions tab.
+**Layer 1 — built-in self-ping (automatic, zero setup).** While the process is awake, it pings its own public URL (`RENDER_EXTERNAL_URL`, provided by Render) every 10 minutes, which resets the idle timer. So the moment *anything* wakes the service — a deploy, one external ping, a visit — it stays awake around the clock and the hourly cron keeps firing. Note: an always-on free service uses ~744 of the 750 free instance-hours per month, so this fits only if it's your only free Render service.
 
-Caveat: GitHub auto-disables scheduled workflows after 60 days with no commits (it emails you first); any commit re-enables it. On a private repo the pings fit inside the free minutes tier; public repos are unlimited.
-
-**Option B — cron-job.org (permanent, ~2 minutes, never expires)**
+**Layer 2 — an external pinger to wake it up (recommended: cron-job.org, ~2 minutes, never expires).** A sleeping process can't run the self-ping, so one external ping source should exist to wake it after a cold stop (Render maintenance restart, a region incident, hours quota exhausted):
 1. Free account at [cron-job.org](https://cron-job.org) → **Create cronjob**.
 2. URL: `https://YOUR-APP.onrender.com/healthz`, schedule: every 10 minutes. Done.
 
-The bot is also safe around sleep/restarts: on wake it posts a catch-up, and a built-in minimum gap (`POST_MIN_GAP_MINUTES`, default 55) guarantees it never double-posts within the hour.
+**Backup — GitHub Actions (already included).** `.github/workflows/keep-alive.yml` runs every 4 hours and pings `/healthz` every 9 minutes for ~3h45m (needs the `RENDER_URL` repository variable). GitHub occasionally drops even low-frequency scheduled runs, which is why this is the backup layer, not the primary one.
 
-**Paid alternative:** a Render Starter plan ($7/mo) or Background Worker never sleeps and needs no pinger at all.
+The bot is also safe around sleep/restarts: on wake the first ping posts a catch-up (min-gap guarded, `POST_MIN_GAP_MINUTES`, default 55), so it never double-posts.
+
+**Paid alternative:** a Render Starter plan ($7/mo) never sleeps and needs no pinger at all.
 
 ## Local test (no posting)
 
@@ -60,7 +57,7 @@ Check one of the generated PNGs to see exactly what gets attached to each post.
 | `DRY_RUN` | `false` = post for real. `true` = generate only. `upload` = upload images but skip publishing. |
 | `CRYPTOPANIC_API_KEY` | Optional free token from [cryptopanic.com/developers/api](https://cryptopanic.com/developers/api/) — adds hot news headlines to the scout. Works without it. |
 | `CRITIC_ENABLED` / `CRITIC_MIN_SCORE` | Quality gate. `true` / `7` = drafts scoring below 7 are rewritten, then skipped while the account posts regularly. |
-| `GATE_GRACE_HOURS` | After this many hours without a successful post, a below-threshold draft is published anyway (default 4 — an idle account is worse than an imperfect post). |
+| `GATE_GRACE_HOURS` | After this many hours without a successful post, a below-threshold draft is published anyway (default 2 — an idle account is worse than an imperfect post). |
 | `SPOTLIGHT_CHART` | `true` (default) renders a third candlestick chart for the coin the editor spotlights. |
 
 ## API used

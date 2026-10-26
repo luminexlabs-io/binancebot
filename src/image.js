@@ -6,16 +6,28 @@ const { warn } = require('./logger');
 
 const FONT_URL = 'https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaVuSans.ttf';
 
-const C = {
-  bg: '#0b0e11',
-  panel: '#151a21',
+// Shared colors + a rotating bg/accent theme. Consecutive posts get different
+// palettes so the feed never shows the same-looking chart twice in a row.
+const BASE = {
   grid: '#232b37',
   up: '#0ecb81',
   down: '#f6465d',
   text: '#eaecef',
   muted: '#848e9c',
-  accent: '#f0b90b',
 };
+
+const THEMES = [
+  { name: 'amber', bg: '#0b0e11', accent: '#f0b90b' },
+  { name: 'sky', bg: '#0a1120', accent: '#38bdf8' },
+  { name: 'violet', bg: '#120f1e', accent: '#a78bfa' },
+];
+
+let C = { ...BASE, ...THEMES[0] };
+
+function hexToRgba(hex, alpha) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
 
 const W = 1280;
 const H = 720;
@@ -70,8 +82,8 @@ function drawBackground(ctx, title, subtitle) {
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, W, H);
   const grad = ctx.createLinearGradient(0, 0, 0, 300);
-  grad.addColorStop(0, 'rgba(240,185,11,0.08)');
-  grad.addColorStop(1, 'rgba(240,185,11,0)');
+  grad.addColorStop(0, hexToRgba(C.accent, 0.1));
+  grad.addColorStop(1, hexToRgba(C.accent, 0));
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, 300);
 
@@ -272,18 +284,91 @@ async function renderMoversChart(snap) {
   return canvas.toBuffer('image/png');
 }
 
-async function renderPostImages(snap, extraSnap = null) {
-  const stamp = Date.now();
-  const out = [];
-  const charts = [
-    { render: renderPriceChart, tag: 'chart', snap },
-    { render: renderMoversChart, tag: 'movers', snap },
+// Semicircular gauge for the Fear & Greed Index - the rotating secondary
+// chart that replaces the movers board on alternating hours.
+async function renderFearGreedChart(fg, fetchedAt) {
+  await ensureFont();
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext('2d');
+
+  drawBackground(ctx, 'Crypto Fear & Greed Index', `alternative.me - ${String(fetchedAt).slice(0, 16)} UTC`);
+
+  const cx = W / 2;
+  const cy = 430;
+  const r = 240;
+  const zones = [
+    [0, 24, '#f6465d', 'Extreme Fear'],
+    [25, 44, '#fd9b4a', 'Fear'],
+    [45, 55, '#f0b90b', 'Neutral'],
+    [56, 75, '#67c587', 'Greed'],
+    [76, 100, '#0ecb81', 'Extreme Greed'],
   ];
-  // Spotlight chart for the editor's picked coin (pre-fetched mini snapshot).
-  if (extraSnap) charts.push({ render: renderPriceChart, tag: 'spotlight', snap: extraSnap });
-  for (const { render, tag, snap: s } of charts) {
+  const angleOf = (v) => Math.PI + (v / 100) * Math.PI;
+  const zoneColorOf = (v) => (zones.find(([a, b]) => v >= a && v <= b) || zones[2])[2];
+  const zoneLabelOf = (v) => (zones.find(([a, b]) => v >= a && v <= b) || zones[2])[3];
+
+  for (const [a, b, color] of zones) {
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 42;
+    ctx.arc(cx, cy, r, angleOf(a), angleOf(b));
+    ctx.stroke();
+  }
+
+  // scale labels
+  setFont(ctx, 20);
+  ctx.fillStyle = C.muted;
+  ctx.textAlign = 'center';
+  for (const v of [0, 25, 50, 75, 100]) {
+    const ang = angleOf(v);
+    ctx.fillText(String(v), cx + Math.cos(ang) * (r + 42), cy + Math.sin(ang) * (r + 42) + 6);
+  }
+
+  // needle
+  const ang = angleOf(fg.value);
+  ctx.strokeStyle = C.text;
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + Math.cos(ang) * (r - 34), cy + Math.sin(ang) * (r - 34));
+  ctx.stroke();
+  ctx.fillStyle = C.accent;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 15, 0, Math.PI * 2);
+  ctx.fill();
+
+  // big reading + zone label
+  const color = zoneColorOf(fg.value);
+  setFont(ctx, 84, 'bold');
+  ctx.fillStyle = color;
+  ctx.fillText(String(fg.value), cx, cy + 130);
+  setFont(ctx, 32, 'bold');
+  ctx.fillText(zoneLabelOf(fg.value), cx, cy + 175);
+  if (fg.previous !== null && fg.previous !== undefined) {
+    const d = fg.value - fg.previous;
+    setFont(ctx, 22);
+    ctx.fillStyle = C.muted;
+    ctx.fillText(`Yesterday: ${fg.previous} (${d === 0 ? 'unchanged' : `${d > 0 ? 'up' : 'down'} ${Math.abs(d)}`})`, cx, cy + 215);
+  }
+  ctx.textAlign = 'left';
+
+  drawFooter(ctx, `${String(fetchedAt).slice(0, 16)} UTC`);
+  return canvas.toBuffer('image/png');
+}
+
+// One lead chart + one secondary chart per post, both chosen by the hour seed
+// so consecutive posts never carry the same visuals: the lead is the spotlight
+// coin when the editor picked one, else a rotating major (scheduler decides);
+// the secondary alternates between the 24h movers board and the Fear & Greed
+// gauge, and the palette cycles through three themes. Every render degrades
+// gracefully - a failed chart is skipped as long as one image survives.
+async function renderPostImages({ leadSnap, majorsSnap, fearGreed = null, hourSeed = 0 }) {
+  const stamp = Date.now();
+  C = { ...BASE, ...THEMES[hourSeed % THEMES.length] };
+  const out = [];
+  const tryRender = async (render, tag) => {
     try {
-      const buffer = await render(s);
+      const buffer = await render();
       const name = `square-${tag}-${stamp}.png`;
       const p = path.join(os.tmpdir(), name);
       fs.writeFileSync(p, buffer);
@@ -291,7 +376,20 @@ async function renderPostImages(snap, extraSnap = null) {
     } catch (err) {
       warn(`image: ${tag} render failed: ${err.message}`);
     }
+  };
+
+  await tryRender(() => renderPriceChart(leadSnap), 'chart');
+  const gauge = hourSeed % 2 === 1 && fearGreed;
+  if (gauge) {
+    await tryRender(() => renderFearGreedChart(fearGreed, majorsSnap.fetchedAt), 'feargreed');
+    if (out.length < 2) await tryRender(() => renderMoversChart(majorsSnap), 'movers');
+  } else {
+    await tryRender(() => renderMoversChart(majorsSnap), 'movers');
+    if (out.length < 2 && fearGreed) {
+      await tryRender(() => renderFearGreedChart(fearGreed, majorsSnap.fetchedAt), 'feargreed');
+    }
   }
+
   if (out.length === 0) throw new Error('failed to render any post image');
   return out;
 }

@@ -2,8 +2,8 @@ const cron = require('node-cron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { log, error } = require('./logger');
-const { getMarketSnapshot } = require('./market');
+const { log, warn, error } = require('./logger');
+const { getMarketSnapshot, getKlines } = require('./market');
 const { getTrends } = require('./trends');
 const { generateViralPost } = require('./agents');
 const { renderPostImages } = require('./image');
@@ -78,6 +78,24 @@ const state = {
   running: false,
 };
 
+// The lead chart must not be BTC every hour. When the editor picked no coin
+// (or picked the main one), rotate the lead among the tracked majors by hour
+// so the images keep changing even in quiet markets.
+async function rotateLeadSnap(snap, config) {
+  const seed = Math.floor(Date.now() / 3600000);
+  const symbol = config.symbols[seed % config.symbols.length];
+  if (symbol === snap.mainSymbol) return snap;
+  const ticker = snap.tickers.find((t) => t.symbol === symbol);
+  if (!ticker) return snap;
+  try {
+    const klines = await getKlines(symbol, '1h', 48);
+    return { ...snap, mainSymbol: symbol, klines };
+  } catch (err) {
+    warn(`scheduler: lead rotation to ${symbol} failed (${err.message}) - staying on ${snap.mainSymbol}`);
+    return snap;
+  }
+}
+
 async function runCycle(config) {
   const startedAt = new Date();
   log('=== posting cycle start ===');
@@ -98,7 +116,13 @@ async function runCycle(config) {
     const viral = await generateViralPost(snap, trends, recent, config);
     log(`agents: draft ready (score ${viral.meta.score ?? 'n/a'}, via ${viral.meta.provider})`);
 
-    const images = await renderPostImages(snap, viral.spotlightSnap);
+    const leadSnap = viral.spotlightSnap || (await rotateLeadSnap(snap, config));
+    const images = await renderPostImages({
+      leadSnap,
+      majorsSnap: snap,
+      fearGreed: trends.fearGreed,
+      hourSeed: Math.floor(Date.now() / 3600000),
+    });
     log(`images: rendered ${images.length} image(s) [${images.map((i) => i.name).join(', ')}]`);
 
     if (config.dryRunMode === 'true') {
@@ -244,12 +268,17 @@ function healthTick(config) {
 function start(config) {
   cron.schedule(
     config.scheduleCron,
-    () => scheduledRun(config),
+    // .catch keeps an unexpected rejection from becoming an unhandled
+    // rejection (which would kill the process on Node 20).
+    () => scheduledRun(config).catch((err) => error(`scheduler: cron run crashed: ${err?.stack || err}`)),
     { timezone: config.scheduleTimezone }
   );
   log(`scheduler: posting every hour (${config.scheduleCron} ${config.scheduleTimezone})`);
   // First post ~15s after boot so a fresh deploy confirms itself in the logs.
-  setTimeout(() => scheduledRun(config), 15000);
+  setTimeout(
+    () => scheduledRun(config).catch((err) => error(`scheduler: boot run crashed: ${err?.stack || err}`)),
+    15000
+  );
 }
 
 module.exports = { start, scheduledRun, healthTick, runCycle, runCycleWithRetries, nextRunAt, state };

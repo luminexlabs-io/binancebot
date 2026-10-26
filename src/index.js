@@ -1,7 +1,18 @@
 const express = require('express');
 const config = require('./config');
-const { log, warn } = require('./logger');
+const { log, warn, error } = require('./logger');
 const scheduler = require('./scheduler');
+const keepalive = require('./keepalive');
+
+// Node 20 kills the process on an unhandled rejection - the "bot silently
+// off" failure mode. Log and ride it out instead; Render restarts on crash.
+process.on('unhandledRejection', (err) => {
+  error(`unhandledRejection: ${err?.stack || err}`);
+});
+process.on('uncaughtException', (err) => {
+  error(`uncaughtException: ${err?.stack || err}`);
+  process.exit(1); // Render restarts; the boot cycle posts the catch-up
+});
 
 const app = express();
 
@@ -41,6 +52,7 @@ async function main() {
 
   app.listen(config.port, () => {
     log(`health server listening on port ${config.port}`);
+    keepalive.startSelfPing();
   });
   scheduler.start(config);
 }
