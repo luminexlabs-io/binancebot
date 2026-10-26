@@ -22,12 +22,12 @@ Runs headless on Render — no UI, no interaction needed. Health/status is serve
 
 ## Keeping Render awake 24/7 (free)
 
-Render's **free plan sleeps a service after ~15 minutes without inbound traffic**, which would pause the hourly posting. Nothing running inside the app can prevent this (a sleeping process can't ping itself) — the fix is an external ping every 10 minutes so Render never reaches its idle timeout. Two ways, either one alone is enough:
+Render's **free plan sleeps a service after ~15 minutes without inbound traffic**, which would pause the hourly posting. Nothing running inside the app can prevent this (a sleeping process can't ping itself) — the fix is an external ping so Render never reaches its idle timeout.
 
 **Option A — GitHub Actions (already included, no extra account)**
 1. Push this repo to GitHub and deploy on Render.
 2. Repo → **Settings → Secrets and variables → Actions → Variables → New repository variable**: name `RENDER_URL`, value `https://YOUR-APP.onrender.com`.
-3. The included `.github/workflows/keep-alive.yml` now pings `/healthz` every 10 minutes, keeping Render awake around the clock. Test it with the "Run workflow" button on the Actions tab.
+3. The included `.github/workflows/keep-alive.yml` runs once every 4 hours and its job pings `/healthz` every 9 minutes for ~3h45m, so coverage is continuous. Low-frequency GitHub schedules run reliably; high-frequency ones (like `*/10`) get silently dropped by GitHub's scheduler — which is exactly why the bot once went dark. Each ping also doubles as a posting check server-side (min-gap guarded): if the service slept through a cron slot, the first ping after waking posts the catch-up. Test the workflow with the "Run workflow" button on the Actions tab.
 
 Caveat: GitHub auto-disables scheduled workflows after 60 days with no commits (it emails you first); any commit re-enables it. On a private repo the pings fit inside the free minutes tier; public repos are unlimited.
 

@@ -20,7 +20,7 @@ const config = {
     enabled: envBool(process.env.CRITIC_ENABLED, true),
     minScore: Number(process.env.CRITIC_MIN_SCORE || 7),
   },
-  gateGraceHours: Number(process.env.GATE_GRACE_HOURS || 4),
+  gateGraceHours: Number(process.env.GATE_GRACE_HOURS || 2),
   spotlightChart: envBool(process.env.SPOTLIGHT_CHART, true),
   groq: {
     key: process.env.GROQ_API_KEY || '',

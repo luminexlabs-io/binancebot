@@ -22,6 +22,9 @@ app.get('/', (req, res) => {
 
 app.get('/healthz', (req, res) => {
   res.status(200).send('ok');
+  // Every keep-alive ping doubles as a posting check (min-gap guarded): if the
+  // service slept through its cron slot, the first ping after waking posts.
+  scheduler.healthTick(config);
 });
 
 async function main() {

@@ -1,15 +1,22 @@
-# Keeps a Render free-tier web service awake 24/7 by pinging it every
-# 10 minutes (Render sleeps services after 15 minutes of inactivity).
+# Keeps a Render free-tier web service awake 24/7 so the hourly posting cron
+# can fire (Render sleeps services after 15 minutes of inactivity).
+#
+# Why not a "*/10" cron like before: GitHub's scheduler routinely drops or
+# delays high-frequency schedules (observed: runs only every ~2 hours), which
+# let the service sleep for good. Instead this workflow runs once every 4 hours
+# - a low-frequency schedule GitHub runs reliably - and the job itself loops,
+# pinging every 9 minutes for ~3h45m. Runs overlap the next one, so coverage is
+# continuous. Each ping also doubles as a posting check server-side
+# (min-gap guarded), so even a missed window only delays the next post.
 #
 # One-time setup after deploying to Render:
 #   Repo -> Settings -> Secrets and variables -> Actions -> Variables ->
 #   New repository variable:  name=RENDER_URL  value=https://YOUR-APP.onrender.com
-# Test it anytime with the "Run workflow" button on the Actions tab.
 name: keep-alive
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '11 */4 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -19,8 +26,9 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     steps:
-      - name: Ping Render health endpoint
+      - name: Ping /healthz every 9 minutes for ~3h45m
         env:
           RENDER_URL: ${{ vars.RENDER_URL }}
         run: |
@@ -29,6 +37,10 @@ jobs:
             echo "Add it under Settings -> Secrets and variables -> Actions -> Variables."
             exit 1
           fi
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "$RENDER_URL/healthz")
-          echo "GET $RENDER_URL/healthz -> HTTP $code (cold starts can take ~60s, that is fine)"
-          [ "$code" = "200" ] || exit 1
+          for i in $(seq 1 25); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "$RENDER_URL/healthz" || echo "000")
+            echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') GET $RENDER_URL/healthz -> HTTP $code (cold starts can take ~60s, that is fine)"
+            # 25 loops x 9 min = 3h45m of coverage; the next scheduled run
+            # (4h later) overlaps before this job hits its timeout.
+            [ "$i" = "25" ] || sleep 540
+          done

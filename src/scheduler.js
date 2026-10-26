@@ -54,13 +54,18 @@ function savePostHistory(entry) {
   }
 }
 
-// Topics posted recently, so the editor agent rotates instead of repeating.
-function recentTopics() {
+// What was posted in the last REPEAT_BLOCK_HOURS, so the agents rotate
+// instead of repeating. Symbols/titles are exact strings from history, which
+// makes dedupe enforceable in code (topics alone are free-text).
+function recentContext() {
   const cutoff = Date.now() - REPEAT_BLOCK_HOURS * 3600 * 1000;
-  return loadHistory()
-    .filter((p) => Date.parse(p.at) > cutoff)
-    .map((p) => p.topic)
-    .filter(Boolean);
+  const posts = loadHistory().filter((p) => Date.parse(p.at) > cutoff);
+  return {
+    topics: posts.map((p) => p.topic).filter(Boolean),
+    symbols: [...new Set(posts.map((p) => p.symbol).filter(Boolean))],
+    titles: posts.map((p) => p.title).filter(Boolean),
+    lastFormat: posts.length ? posts[posts.length - 1].format : null,
+  };
 }
 
 const state = {
@@ -70,6 +75,7 @@ const state = {
   lastSuccessAt: loadLastSuccessAt(),
   lastPostMeta: null,
   trendsAt: null,
+  running: false,
 };
 
 async function runCycle(config) {
@@ -88,7 +94,8 @@ async function runCycle(config) {
     );
     log(`market: got ${snap.klines.length} candles + ${snap.tickers.length} tickers`);
 
-    const viral = await generateViralPost(snap, trends, recentTopics(), config);
+    const recent = recentContext();
+    const viral = await generateViralPost(snap, trends, recent, config);
     log(`agents: draft ready (score ${viral.meta.score ?? 'n/a'}, via ${viral.meta.provider})`);
 
     const images = await renderPostImages(snap, viral.spotlightSnap);
@@ -107,9 +114,15 @@ async function runCycle(config) {
     }
 
     // Quality gate: below-threshold drafts are skipped while the account has
-    // posted recently. After gateGraceHours of silence, post the best
+    // posted recently - UNLESS the critic already rewrote them (meta.rewritten),
+    // which counts as fixed. After gateGraceHours of silence, post the best
     // available draft anyway - an idle account is worse than an imperfect one.
-    if (config.dryRunMode === 'false' && viral.meta.score !== null && viral.meta.score < config.critic.minScore) {
+    if (
+      config.dryRunMode === 'false' &&
+      !viral.meta.rewritten &&
+      viral.meta.score !== null &&
+      viral.meta.score < config.critic.minScore
+    ) {
       const hoursSince = state.lastSuccessAt ? (Date.now() - state.lastSuccessAt) / 3600000 : Infinity;
       if (hoursSince < config.gateGraceHours) {
         log(`scheduler: quality gate - score ${viral.meta.score} < ${config.critic.minScore}, last post ${hoursSince.toFixed(1)}h ago; skipping this hour`);
@@ -198,17 +211,34 @@ function nextRunAt(config) {
   return next.toISOString();
 }
 
-// Trigger used by the hourly cron and the boot-time run: never posts sooner
-// than minGapMinutes after the previous real post.
-function scheduledRun(config) {
-  if (state.lastSuccessAt) {
-    const mins = Math.round((Date.now() - state.lastSuccessAt) / 60000);
-    if (mins < config.minGapMinutes) {
-      log(`scheduler: skipping cycle - last successful post was ${mins} min ago (< ${config.minGapMinutes} min gap)`);
-      return Promise.resolve({ ok: true, skipped: true });
-    }
+// Trigger used by the hourly cron, boot, and health-tick pings: one cycle at a
+// time, and never sooner than minGapMinutes after the previous real post.
+// The health-tick is what makes the bot survive Render free-tier sleeps: the
+// first ping after a wake-up posts (catching up the missed cron slot), so
+// posting no longer depends on the process being awake at exactly :00.
+async function scheduledRun(config) {
+  if (state.running) {
+    log('scheduler: cycle already in progress - skipping this trigger');
+    return { ok: true, skipped: true };
   }
-  return runCycleWithRetries(config);
+  state.running = true;
+  try {
+    if (state.lastSuccessAt) {
+      const mins = Math.round((Date.now() - state.lastSuccessAt) / 60000);
+      if (mins < config.minGapMinutes) {
+        log(`scheduler: skipping cycle - last successful post was ${mins} min ago (< ${config.minGapMinutes} min gap)`);
+        return { ok: true, skipped: true };
+      }
+    }
+    return await runCycleWithRetries(config);
+  } finally {
+    state.running = false;
+  }
+}
+
+// Fire-and-forget tick for the /healthz endpoint (keep-alive pings).
+function healthTick(config) {
+  scheduledRun(config).catch((err) => error(`scheduler: healthTick failed: ${err.message}`));
 }
 
 function start(config) {
@@ -222,4 +252,4 @@ function start(config) {
   setTimeout(() => scheduledRun(config), 15000);
 }
 
-module.exports = { start, scheduledRun, runCycle, runCycleWithRetries, nextRunAt, state };
+module.exports = { start, scheduledRun, healthTick, runCycle, runCycleWithRetries, nextRunAt, state };

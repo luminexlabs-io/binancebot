@@ -24,7 +24,7 @@ services:
       - key: CRITIC_MIN_SCORE
         value: "7"
       - key: GATE_GRACE_HOURS
-        value: "4"
+        value: "2"
       - key: SPOTLIGHT_CHART
         value: "true"
       - key: POST_SCHEDULE_CRON
