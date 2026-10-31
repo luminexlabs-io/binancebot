@@ -98,7 +98,8 @@ function drawBackground(ctx, title, subtitle) {
 function drawFooter(ctx, note) {
   setFont(ctx, 20);
   ctx.fillStyle = C.muted;
-  ctx.fillText('Auto-posted by AI Market Bot', 48, H - 28);
+  const brand = process.env.BRAND_NAME || 'Binance Market Intelligence';
+  ctx.fillText(brand, 48, H - 28);
   const label = `${note} - Data: Binance Spot API`;
   ctx.textAlign = 'right';
   ctx.fillText(label, W - 48, H - 28);
@@ -356,13 +357,86 @@ async function renderFearGreedChart(fg, fetchedAt) {
   return canvas.toBuffer('image/png');
 }
 
-// One lead chart + one secondary chart per post, both chosen by the hour seed
-// so consecutive posts never carry the same visuals: the lead is the spotlight
-// coin when the editor picked one, else a rotating major (scheduler decides);
-// the secondary alternates between the 24h movers board and the Fear & Greed
-// gauge, and the palette cycles through three themes. Every render degrades
-// gracefully - a failed chart is skipped as long as one image survives.
-async function renderPostImages({ leadSnap, majorsSnap, fearGreed = null, hourSeed = 0 }) {
+function wrapText(ctx, text, maxWidth) {
+  const words = String(text || '').split(' ');
+  const lines = [];
+  let currentLine = '';
+  for (const word of words) {
+    const testLine = currentLine ? `${currentLine} ${word}` : word;
+    if (ctx.measureText(testLine).width > maxWidth) {
+      if (currentLine) lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = testLine;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines;
+}
+
+async function renderNewsCard({ headline, category = 'BREAKING NEWS', fearGreed, fetchedAt }) {
+  await ensureFont();
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  const grad = ctx.createLinearGradient(0, 0, W, H);
+  grad.addColorStop(0, hexToRgba(C.accent, 0.12));
+  grad.addColorStop(0.5, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, hexToRgba('#ef4444', 0.1));
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = C.grid;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(32, 32, W - 64, H - 64);
+
+  drawChip(ctx, 64, 70, category.toUpperCase(), '#ef4444', '#ffffff');
+
+  if (fearGreed) {
+    const fgText = `SENTIMENT: ${fearGreed.value} (${fearGreed.label.toUpperCase()})`;
+    const fgColor = fearGreed.value >= 50 ? C.up : C.down;
+    drawChip(ctx, W - 440, 70, fgText, hexToRgba(fgColor, 0.2), fgColor);
+  }
+
+  setFont(ctx, 42, 'bold');
+  ctx.fillStyle = C.text;
+  const cleanHeadline = String(headline || '')
+    .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+    .trim();
+  const lines = wrapText(ctx, cleanHeadline, W - 160).slice(0, 4);
+  let y = 200;
+  for (const line of lines) {
+    ctx.fillText(line, 64, y);
+    y += 56;
+  }
+
+  ctx.fillStyle = C.accent;
+  ctx.fillRect(64, y + 10, 140, 4);
+
+  // Market monitor info box
+  const boxY = Math.max(y + 40, 440);
+  ctx.fillStyle = hexToRgba(C.grid, 0.6);
+  ctx.beginPath();
+  ctx.roundRect(64, boxY, W - 128, 130, 12);
+  ctx.fill();
+
+  setFont(ctx, 22, 'bold');
+  ctx.fillStyle = C.text;
+  ctx.fillText('REAL-TIME MARKET DISPATCH', 96, boxY + 45);
+
+  setFont(ctx, 20);
+  ctx.fillStyle = C.muted;
+  ctx.fillText('Live analysis grounded in on-chain news, regulatory filings, and Binance spot order books.', 96, boxY + 84);
+
+  drawFooter(ctx, `${String(fetchedAt).slice(0, 16)} UTC - Live Wire`);
+  return canvas.toBuffer('image/png');
+}
+
+// One lead chart/banner + one secondary graphic per post.
+async function renderPostImages({ leadSnap, majorsSnap, fearGreed = null, hourSeed = 0, format = 'market-recap', topic = '', headline = '' }) {
   const stamp = Date.now();
   C = { ...BASE, ...THEMES[hourSeed % THEMES.length] };
   const out = [];
@@ -378,15 +452,23 @@ async function renderPostImages({ leadSnap, majorsSnap, fearGreed = null, hourSe
     }
   };
 
-  await tryRender(() => renderPriceChart(leadSnap), 'chart');
-  const gauge = hourSeed % 2 === 1 && fearGreed;
-  if (gauge) {
-    await tryRender(() => renderFearGreedChart(fearGreed, majorsSnap.fetchedAt), 'feargreed');
+  // If breaking-news or meme-debate format, lead with a bold narrative card
+  if ((format === 'breaking-news' || format === 'meme-debate') && (headline || topic)) {
+    const category = format === 'breaking-news' ? 'BREAKING CRYPTO NEWS' : 'MARKET ALPHA & DEBATE';
+    await tryRender(() => renderNewsCard({ headline: headline || topic, category, fearGreed, fetchedAt: majorsSnap.fetchedAt }), 'news');
+    if (leadSnap) await tryRender(() => renderPriceChart(leadSnap), 'chart');
     if (out.length < 2) await tryRender(() => renderMoversChart(majorsSnap), 'movers');
   } else {
-    await tryRender(() => renderMoversChart(majorsSnap), 'movers');
-    if (out.length < 2 && fearGreed) {
+    await tryRender(() => renderPriceChart(leadSnap), 'chart');
+    const gauge = hourSeed % 2 === 1 && fearGreed;
+    if (gauge) {
       await tryRender(() => renderFearGreedChart(fearGreed, majorsSnap.fetchedAt), 'feargreed');
+      if (out.length < 2) await tryRender(() => renderMoversChart(majorsSnap), 'movers');
+    } else {
+      await tryRender(() => renderMoversChart(majorsSnap), 'movers');
+      if (out.length < 2 && fearGreed) {
+        await tryRender(() => renderFearGreedChart(fearGreed, majorsSnap.fetchedAt), 'feargreed');
+      }
     }
   }
 
@@ -394,4 +476,4 @@ async function renderPostImages({ leadSnap, majorsSnap, fearGreed = null, hourSe
   return out;
 }
 
-module.exports = { renderPostImages };
+module.exports = { renderPostImages, renderNewsCard };

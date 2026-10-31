@@ -38,9 +38,10 @@ const config = {
     max: Number(process.env.POST_RETRIES || 2),
     delayMs: Number(process.env.POST_RETRY_DELAY_MS || 15 * 60 * 1000),
   },
+  brandName: process.env.BRAND_NAME || 'Binance Market Intelligence',
   // Minimum minutes between real posts. Guards against double-posting when the
   // service restarts or is woken by a keep-alive ping shortly after posting.
-  minGapMinutes: Number(process.env.POST_MIN_GAP_MINUTES || 55),
+  minGapMinutes: Number(process.env.POST_MIN_GAP_MINUTES || 180),
 };
 
 // false = post for real | "upload" = upload images but skip publish | true = generate only

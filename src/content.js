@@ -7,11 +7,15 @@ const ANGLES = [
   'a balanced, risk-focused take on the current price action',
 ];
 
-const SYSTEM = `You write Binance Square posts for an automated crypto market account. Rules:
-- Confident but neutral tone, no financial advice, never promise profits.
-- Hook the reader in the first sentence and reference the actual numbers provided.
-- Plain text only (no markdown, no asterisks). Use 2-4 hashtags in Binance Square format like #BTC# #ETH# on the last line.
-- Reply ONLY with minified JSON: {"title": string, "content": string}. Title max 70 characters, content 350-800 characters.`;
+const SYSTEM = `You write engaging Binance Square posts for a crypto market account. Rules:
+- Confident, objective tone; no financial advice; never promise profits.
+- Start with a compelling headline hook with an emoji (e.g. 🚨, 📊, ⚡).
+- Use blank lines (\n\n) between short paragraphs for mobile readability.
+- Use bullet points (• ) for key price stats and support/resistance levels.
+- Always use $SYMBOL cashtags for coins (e.g. $BTC, $ETH).
+- End with a sharp question to encourage replies and discussion.
+- Use clean tags on the last line (e.g. $BTC #Crypto #BinanceSquare). No trailing hashes like "#BTC#".
+- Reply ONLY with minified JSON: {"title": string, "content": string}. Title max 80 characters, content 350-900 characters.`;
 
 function fmtPrice(v) {
   if (v >= 1000) return '$' + v.toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -23,7 +27,7 @@ function snapshotForPrompt(snap) {
   return JSON.stringify({
     timeUtc: snap.fetchedAt,
     mainSymbol: snap.mainSymbol,
-    hourlyCandles: snap.klines.slice(-12).map((k) => ({ o: k.open, h: k.high, l: k.low, c: k.close })),
+    hourlyCandles: snap.klines.slice(-6).map((k) => ({ o: k.open, h: k.high, l: k.low, c: k.close })),
     tickers: snap.tickers.map((t) => ({
       symbol: t.symbol,
       price: t.lastPrice,
@@ -139,19 +143,21 @@ function templateContent(snap) {
   const rows = [...snap.tickers].sort((a, b) => b.priceChangePercent - a.priceChangePercent);
   const main = snap.tickers.find((t) => t.symbol === snap.mainSymbol) || rows[0];
   const sign = (v) => (v >= 0 ? '+' : '');
+  const mainSym = snap.mainSymbol.replace(/USDT$/, '');
   const lines = [
-    `Hourly market update (${snap.fetchedAt.slice(0, 16)} UTC)`,
+    `📊 Market Check: $${mainSym} holding near ${fmtPrice(main.lastPrice)}`,
     '',
-    `${snap.mainSymbol} is trading around ${fmtPrice(main.lastPrice)} (${sign(main.priceChangePercent)}${main.priceChangePercent.toFixed(2)}% in 24h).`,
+    `24h momentum update for $${mainSym} (${sign(main.priceChangePercent)}${main.priceChangePercent.toFixed(2)}%):`,
     '',
-    '24h performance across majors:',
-    ...rows.map((t) => `- ${t.symbol}: ${fmtPrice(t.lastPrice)} (${sign(t.priceChangePercent)}${t.priceChangePercent.toFixed(2)}%)`),
+    'Performance across majors:',
+    ...rows.map((t) => `• $${t.symbol.replace(/USDT$/, '')}: ${fmtPrice(t.lastPrice)} (${sign(t.priceChangePercent)}${t.priceChangePercent.toFixed(2)}%)`),
     '',
-    'Not financial advice. Data: Binance spot.',
-    '#BTC# #Crypto# #BinanceSquare#',
+    '👇 How are you positioning for the next session? Bullish or cautious?',
+    '',
+    `$${mainSym} $BTC #Crypto #BinanceSquare #Trading`,
   ];
   return {
-    title: `Market Check: ${snap.mainSymbol} ${main.priceChangePercent >= 0 ? 'Up' : 'Down'} ${Math.abs(main.priceChangePercent).toFixed(1)}% in 24h`,
+    title: `Market Check: $${mainSym} ${main.priceChangePercent >= 0 ? 'Up' : 'Down'} ${Math.abs(main.priceChangePercent).toFixed(1)}% in 24h`,
     content: lines.join('\n'),
   };
 }

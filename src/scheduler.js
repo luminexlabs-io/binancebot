@@ -122,6 +122,9 @@ async function runCycle(config) {
       majorsSnap: snap,
       fearGreed: trends.fearGreed,
       hourSeed: Math.floor(Date.now() / 3600000),
+      format: viral.meta.strategy.format,
+      topic: viral.meta.strategy.topic,
+      headline: viral.title,
     });
     log(`images: rendered ${images.length} image(s) [${images.map((i) => i.name).join(', ')}]`);
 

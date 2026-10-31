@@ -6,51 +6,112 @@ const { getSpotlightSnap } = require('./trends');
 // copy), critic (score + rewrite). Every agent runs through the same provider
 // fallback chain; code-level validation happens after each call.
 
-const TITLE_MAX = 70;
-const CONTENT_MIN = 350;
-const CONTENT_MAX = 800;
+const TITLE_MAX = 80;
+const CONTENT_MIN = 300;
+const CONTENT_MAX = 950;
 
-const FORMATS = ['market-recap', 'trend-spotlight', 'sentiment', 'education', 'question'];
+const FORMATS = ['market-recap', 'trend-spotlight', 'sentiment', 'education', 'question', 'breaking-news', 'meme-debate'];
 
-const EDITOR_SYSTEM = `You are the strategy editor of an automated crypto account that posts on Binance Square every hour. Pick what THIS hour's post should be about to maximize engagement and trending potential.
+const EDITOR_SYSTEM = `You are the viral strategy editor of a crypto creator account on Binance Square. Pick what THIS post should be about to maximize engagement, discussions, and reach.
 
 Rules:
-- Prefer trending coins that actually trade on Binance spot: the trending list marks each coin's "binancePair" (null = not listed). Majors (BTC, ETH, SOL, BNB, XRP) are always valid.
+- Focus on momentum & breaking stories: prefer coins with big 24h price moves, heavy volume spikes, trending signals, or major breaking headlines from newsHeadlines (regulations, macro, hacks, listings).
+- Tracked majors ($BTC, $ETH, $SOL, $BNB, $XRP) are always strong candidates.
+- If breaking news is significant, choose format "breaking-news" and feature the event!
+- If market is sideways, a "meme-debate" or "sentiment" post drives massive engagement and comments.
 - If the chosen topic is a single coin, "symbol" must be its Binance pair (e.g. "SOLUSDT") or "NONE".
-- NEVER pick a coin whose pair is in recentSymbolsToAvoid, and never a topic close to recentTopicsToAvoid - repetition kills engagement.
-- Rotate formats: do NOT reuse mostRecentFormat unless the data strongly favors it. Vary the emotional register (hype, caution, curiosity, education).
-- The hook must be specific and tied to a number or event actually present in the data.
-- If Fear & Greed just crossed a zone (e.g. into Extreme Fear/Greed), a sentiment post is a strong pick.
+- NEVER pick a coin whose pair is in recentSymbolsToAvoid, and never a topic close to recentTopicsToAvoid. Freshness and variety drive algorithmic push.
+- Rotate formats: do NOT reuse mostRecentFormat unless market volatility strongly favors it.
+- Craft a hook that creates curiosity, debate, or urgency tied to actual live numbers.
 - Reply ONLY with minified JSON:
-{"topic": string, "symbol": string ("NONE" if the post is not about one coin), "angle": string, "format": one of "market-recap"|"trend-spotlight"|"sentiment"|"education"|"question", "hook": string, "hashtags": string[] (2-4 short tags like "BTC", "Altcoins")}`;
+{"topic": string, "symbol": string ("NONE" if the post is not about one coin), "angle": string, "format": one of "market-recap"|"trend-spotlight"|"sentiment"|"education"|"question"|"breaking-news"|"meme-debate", "hook": string, "hashtags": string[] (2-4 tags like "Crypto", "Altcoins", "Trading")}`;
 
-const WRITER_SYSTEM = `You write viral Binance Square posts for an automated crypto market account. Each post follows a per-format structure so consecutive posts never look alike.
+const WRITER_SYSTEM = `You are a top-tier crypto content creator and strategist writing viral posts for Binance Square.
+Your goal is maximum engagement: scroll-stopping hooks, mobile readability, and debates that drive comments and shares.
 
-Rules:
-- Follow the FORMAT STRUCTURE block in the message exactly (opening move, middle, closing).
-- First line hooks with a concrete number, contrast or event from the data. Never open with "The market is...".
-- Mention the Fear & Greed Index ONLY in a "sentiment" post - never anywhere else.
-- Every fact appears exactly once; never restate a number you already used.
-- Confident but neutral tone, no financial advice, never promise profits, no hype scams.
-- Use ONLY numbers and facts present in the provided data. Never invent on-chain stats, integrations, news or rankings.
-- Plain text only (no markdown, no asterisks, no bullet symbols).
-- Specific numbers from the data drive credibility.
-- 2-4 hashtags in Binance Square format like #BTC# #ETH# on the last line.
-- Reply ONLY with minified JSON: {"title": string, "content": string}. Title max ${TITLE_MAX} characters, content between ${CONTENT_MIN} and ${CONTENT_MAX} characters.`;
+Formatting & Structure Rules:
+1. HEADLINE HOOK (First line):
+   - Start with an attention-grabbing visual emoji (🚨, 🔥, 📊, ⚡) and a bold question or hook featuring the coin cashtag (e.g. "🚨 $LSK surges +24% — Breakout or Bull Trap?").
+   - Follow immediately with a blank line (\n\n).
 
-// One distinct skeleton per format - this is what stops every post from being
-// "coin moved X%, volume Y, BTC at Z, F&G N, question".
+2. MOBILE-FIRST READABILITY:
+   - NEVER output a solid wall of text. Break into short 1-2 sentence paragraphs separated by blank lines (\n\n).
+   - Use clean bullet points (• ) for key levels (Support, Resistance, High/Low, or Volume stats).
+   - Use tasteful emoji markers (e.g. 📊, 🎯, 💡, ⚠️, 👇) to guide the reader.
+
+3. CASHTAGS ARE MANDATORY ($SYMBOL):
+   - Every coin ticker mentioned MUST be prefixed with "$" (e.g. $BTC, $ETH, $SOL, $LSK). Never write bare tickers like "BTC" or "LSK".
+   - Cashtags link directly to Binance trading pairs and index the post in that coin's community feed.
+
+4. INSIGHT OVER STALE STATS:
+   - Don't just list raw decimal numbers; give traders actionable context (momentum, risk/reward, support defense).
+   - Confident, objective tone. No financial advice, no guaranteed profit claims.
+
+5. ENGAGING CALL TO ACTION (CTA):
+   - Conclude with a sharp, specific either/or question or debate prompt that forces readers to reply in comments (comments boost algorithmic reach by 10x).
+
+6. BOTTOM TAG LINE:
+   - Put coin cashtags first, followed by 2-3 clean hashtags (e.g. "$LSK $BTC #Crypto #Altcoins #Binance").
+   - NEVER use trailing hashes like "#BTC#".
+
+Reply ONLY with minified JSON: {"title": string, "content": string}. Title max ${TITLE_MAX} characters, content between ${CONTENT_MIN} and ${CONTENT_MAX} characters.`;
+
+// One distinct skeleton per format - designed for visual hierarchy and mobile scanning.
 const FORMAT_GUIDES = {
-  'market-recap': `Open with the single most telling number across the majors. Middle: how the tracked majors split green vs red and which one is diverging from the pack. Closing: one sentence on what would change the picture in the next few hours (a statement, not a question).`,
-  'trend-spotlight': `Open with what the coin did - its most unusual stat (move, volume spike or rank). Middle: 1-2 sentences of context on what the project is or why it is trending today, then the nearest support and resistance from the hourly candles. Closing: ask how traders are playing it.`,
-  'sentiment': `Open with the Fear & Greed reading and whether it moved vs yesterday. Middle: where recent price action agrees or disagrees with that reading, plus one concrete level to watch. Closing: ask readers where the index goes next.`,
-  'education': `Open by naming exactly ONE concept (e.g. what 24h quote volume really measures, why a trending rank says nothing about liquidity, what hourly wicks reveal). Middle: explain it in plain words using today's real numbers as the worked example. Closing: a one-line takeaway, then a light question.`,
-  'question': `Open with a sharp, specific claim backed by one number (mildly contrarian is fine if defensible). Middle: 1-2 sentences of evidence from the data, including the strongest counter-argument. Closing: a direct either/or question to readers.`,
+  'market-recap': `
+- Opener: Bold headline with emoji on the most telling divergence across majors today.
+- Section 1 (Market Pulse): How the majors split (green vs red), using $BTC as the anchor.
+- Section 2 (Key Data): Bullet points (• ) showing key movers, volumes, and divergence.
+- Closing: One decisive level that could flip momentum, then an engaging debate question for readers.`,
+
+  'trend-spotlight': `
+- Opener: Hook headline focusing on the spotlight coin's extreme move or volume spike.
+- Section 1 (The Catalyst): 1-2 punchy sentences on what the project is and why momentum ignited today.
+- Section 2 (Key Levels): Bullet points (• ) for Resistance, Support, and 24h High.
+- Closing: Ask traders whether they are taking profits or riding to the next resistance.`,
+
+  'sentiment': `
+- Opener: Headline contrasting the current Fear & Greed Index reading against price action.
+- Section 1 (Sentiment Check): Is the market acting fearful or greedy compared to what prices show?
+- Section 2 (The Setup): Bullet points (• ) on key levels that could flip sentiment or trigger liquidations.
+- Closing: Ask readers where they expect the market to head next.`,
+
+  'education': `
+- Opener: A sharp insight exposing a common trader mistake (e.g. volume vs liquidity, fake breakouts).
+- Section 1 (The Lesson): Explain the concept in plain English using today's live numbers as the example.
+- Section 2 (Takeaways): Bullet points (• ) with 2 actionable rules.
+- Closing: A light takeaway and a question asking how traders handle this setup.`,
+
+  'question': `
+- Opener: A bold, slightly contrarian thesis backed by live numbers.
+- Section 1 (The Setup): 2 short paragraphs giving the bull case vs the bear counter-argument.
+- Section 2 (The Levels): Bullet points (• ) comparing the upside target vs breakdown risk.
+- Closing: A direct voting question (e.g. "Bullish or Bearish from here? Drop your vote below 👇").`,
+
+  'breaking-news': `
+- Opener: 🚨 BREAKING: Bold headline with emoji on a major headline from newsHeadlines.
+- Section 1 (The Scoop): 1-2 punchy sentences summarizing what just happened and why it matters.
+- Section 2 (Market & Token Impact): Bullet points (• ) on price reaction, affected tokens ($BTC, $ETH, etc.), and key levels.
+- Closing: Debate question: "Bullish long-term or short-term noise? Share your thoughts below 👇".`,
+
+  'meme-debate': `
+- Opener: A witty, relatable crypto hook or dilemma (e.g. dip buyers vs profit takers, diamond hands, bear trap psychology).
+- Section 1 (The Sentiment): 1-2 sentences capturing trader emotion or market hype vs reality.
+- Section 2 (The Data Reality): Bullet points (• ) comparing actual numbers vs public sentiment.
+- Closing: An entertaining either/or question that compels traders to drop their vote below 👇.`,
 };
 
-const CRITIC_SYSTEM = `You are a harsh social-media editor scoring Binance Square posts for viral potential (1-10). Criteria: hook strength (does the first line stop the scroll), specificity (real numbers), factual grounding (every number must be traceable to the data in the message - invented stats are an automatic fail), emotional pull, clarity, a closing that fits the intended format, hashtag quality, and distinctiveness - a post that reads like a rerun of the account's recent posts (listed in the message) must be heavily penalized. Deduct for vague claims, advice-y tone, repeated stats, walls of text, or weak endings.
+const CRITIC_SYSTEM = `You are a top social-media strategist scoring Binance Square posts for viral reach (1-10).
+Criteria:
+- Scroll-stopping hook: does the first line have an emoji and a compelling headline?
+- Formatting & readability: clean blank lines (\n\n) between short paragraphs, bullet points (• ) for levels. Dense walls of text MUST be scored below 6.
+- Cashtag compliance: coins must use $SYMBOL cashtags (e.g. $BTC, $SOL).
+- Factual grounding: every number must trace to provided data (invented stats = score 1-2).
+- Comment-driving CTA: does the closing question provoke replies?
+- No spammy trailing hashtags (no "#BTC#", use standard "#Crypto").
+
 Reply ONLY with minified JSON:
-{"score": number (1-10), "issues": string (one short sentence, empty if score >= 8), "revised": {"title": string, "content": string} (only if score < 7; rewrite the post fixing the issues, same rules: hook first line, real numbers, plain text, format-fitting closing, 2-4 hashtags like #BTC# on the last line)}`;
+{"score": number (1-10), "issues": string (empty if score >= 8), "revised": {"title": string, "content": string} (only if score < 7; rewrite with hook, line breaks, emojis, bullet points, $cashtags, and viral CTA)}`;
 
 function trendsForPrompt(trends, recent = {}) {
   // Annotate each trending coin with its Binance pair (or null) so the editor
@@ -195,7 +256,7 @@ function spotlightForPrompt(spotlightSnap) {
   return JSON.stringify({
     symbol: spotlightSnap.mainSymbol,
     ticker: spotlightSnap.tickers[0],
-    hourlyCandles: spotlightSnap.klines.slice(-12).map((k) => ({ o: k.open, h: k.high, l: k.low, c: k.close })),
+    hourlyCandles: spotlightSnap.klines.slice(-6).map((k) => ({ o: k.open, h: k.high, l: k.low, c: k.close })),
   });
 }
 
@@ -226,14 +287,14 @@ async function runWriter(strategy, snap, trends, recent, spotlightData, config) 
 
 async function runCritic(post, strategy, snap, trends, recent, spotlightData, config) {
   if (!config.critic.enabled) return null;
+  await new Promise((r) => setTimeout(r, 1500));
   const user =
     `Score this draft. Intended format: ${strategy.format}. Topic: ${strategy.topic}.\n` +
-    `Ground every number against this data (invented stats = score 1-2):\n` +
-    `Live market data: ${snapshotForPrompt(snap)}\n` +
-    (spotlightData ? `Spotlight coin data: ${spotlightData}\n` : '') +
-    `Trend context: ${trendsForPrompt(trends, {})}\n` +
-    `The account's recent posts (penalize anything that reads like a rerun of these):\n` +
-    `${recent.titles?.slice(-5).map((t) => `- ${t}`).join('\n') || '(history unavailable)'}\n\n` +
+    `Ground every number against this data:\n` +
+    `Symbol: ${strategy.symbol}\n` +
+    (spotlightData ? `Spotlight data: ${spotlightData}\n` : '') +
+    `Tickers: ${JSON.stringify(snap.tickers.map((t) => ({ s: t.symbol, p: t.lastPrice, c: t.priceChangePercent, v: Math.round(t.quoteVolume) })))}\n` +
+    `Fear & Greed: ${JSON.stringify(trends.fearGreed)}\n\n` +
     `Title: "${post.title}"\nContent:\n${post.content}`;
   try {
     const { value, provider } = await runProviderChain(config, {
@@ -259,6 +320,64 @@ async function runCritic(post, strategy, snap, trends, recent, spotlightData, co
     warn(`agents: critic failed (${err.message}) - accepting the draft`);
     return null;
   }
+}
+
+function formatContentViral(content, title, strategySymbol, mainSymbol) {
+  let text = String(content || '').trim();
+
+  // 1. Ensure title hook is at the top if not already present
+  if (title && title.trim()) {
+    const cleanTitle = title.trim();
+    const firstLine = text.split('\n')[0].toLowerCase();
+    const titleSnippet = cleanTitle.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 15);
+    if (!firstLine.replace(/[^a-z0-9]/g, '').includes(titleSnippet)) {
+      text = `${cleanTitle}\n\n${text}`;
+    }
+  }
+
+  // 2. Clean trailing-hash syntax: #BTC# -> #BTC
+  text = text.replace(/#([A-Za-z0-9_]+)#/g, '#$1');
+
+  // 3. Normalize any $SYMBOLUSDT to $SYMBOL (e.g. $STXUSDT -> $STX)
+  text = text.replace(/\$([A-Za-z0-9]+)USDT\b/g, '$$$1');
+
+  // 4. Identify coins that should have cashtags
+  const coins = new Set(['BTC', 'ETH', 'SOL', 'BNB', 'XRP']);
+  if (strategySymbol && strategySymbol !== 'NONE') {
+    coins.add(strategySymbol.replace(/USDT$/, ''));
+  }
+  if (mainSymbol) {
+    coins.add(mainSymbol.replace(/USDT$/, ''));
+  }
+
+  // 5. Ensure coin ticker mentions are cashtagged with "$"
+  for (const coin of coins) {
+    if (!coin || coin.length < 2) continue;
+    const reg = new RegExp(`(?<![\\$#A-Za-z0-9])\\b${coin}\\b`, 'g');
+    text = text.replace(reg, `$$${coin}`);
+  }
+
+  // 6. Ensure the spotlight and main coin cashtags appear cleanly in the footer
+  const spotlightCoin = strategySymbol && strategySymbol !== 'NONE' ? strategySymbol.replace(/USDT$/, '') : null;
+  const mainCoin = mainSymbol ? mainSymbol.replace(/USDT$/, '') : 'BTC';
+  const targetCashtags = [];
+  if (spotlightCoin) targetCashtags.push(`$${spotlightCoin}`);
+  if (mainCoin && mainCoin !== spotlightCoin) targetCashtags.push(`$${mainCoin}`);
+
+  const lines = text.split('\n');
+  const lastLine = lines[lines.length - 1].trim();
+  const missing = targetCashtags.filter((tag) => !lastLine.includes(tag));
+
+  if (missing.length > 0) {
+    if (lastLine.includes('#') || lastLine.includes('$')) {
+      lines[lines.length - 1] = `${missing.join(' ')} ${lastLine}`.trim();
+      text = lines.join('\n');
+    } else {
+      text = `${text}\n\n${missing.join(' ')} #Crypto #BinanceSquare`;
+    }
+  }
+
+  return text;
 }
 
 // Returns { title, content, meta, spotlightSnap }.
@@ -307,20 +426,15 @@ async function generateViralPost(snap, trends, recent, config) {
   }
 
   const meta = { strategy, score, provider, criticNote, rewritten };
-  // Writers often drop Square's trailing hashtag hash ("#QNT" instead of
-  // "#QNT#"), which breaks tagging on Square - normalize, but never at the
-  // cost of exceeding the length limit.
-  const normalized = finalPost.content.replace(
-    // A hashtag needs at least one letter - "#38" (a rank) is not one.
-    /#(?=[A-Za-z0-9]*[A-Za-z])([A-Za-z0-9]{2,20})(?=[\s]|$)/g,
-    '#$1#'
-  );
+  const formatted = formatContentViral(finalPost.content, finalPost.title, strategy.symbol, snap.mainSymbol);
+  const finalContent = formatted.length <= CONTENT_MAX ? formatted : formatted.slice(0, CONTENT_MAX);
+
   return {
     title: finalPost.title,
-    content: normalized.length <= CONTENT_MAX ? normalized : finalPost.content,
+    content: finalContent,
     meta,
     spotlightSnap,
   };
 }
 
-module.exports = { generateViralPost };
+module.exports = { generateViralPost, formatContentViral };

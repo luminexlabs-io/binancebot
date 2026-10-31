@@ -81,19 +81,48 @@ async function getTopMovers() {
   }, null);
 }
 
-// https://cryptopanic.com/api/free/v1/posts/ - needs a free API token; when
-// absent the editor simply works without news context.
-async function getCryptoPanicNews(apiKey) {
-  if (!apiKey) return [];
-  return safe('cryptopanic', async () => {
-    const url =
-      `https://cryptopanic.com/api/free/v1/posts/?auth_token=${encodeURIComponent(apiKey)}` +
-      '&public=true&filter=hot';
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    return (json.results || []).slice(0, 5).map((p) => p.title);
-  }, []);
+// Free public crypto news RSS fetcher (CoinTelegraph & Decrypt) - no API key needed.
+async function getPublicRssNews() {
+  const feeds = [
+    { name: 'cointelegraph', url: 'https://cointelegraph.com/rss' },
+    { name: 'decrypt', url: 'https://decrypt.co/feed' },
+  ];
+  const headlines = [];
+  for (const feed of feeds) {
+    try {
+      const res = await fetch(feed.url, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) continue;
+      const text = await res.text();
+      const matches = [...text.matchAll(/<item>[\s\S]*?<title>(.*?)<\/title>/g)].slice(0, 4);
+      for (const m of matches) {
+        const title = m[1].replace(/<!\[CDATA\[(.*?)\]\]>/g, '$1').trim();
+        if (title && !headlines.includes(title)) headlines.push(title);
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }
+  return headlines.slice(0, 6);
+}
+
+// CryptoPanic news when token configured; falls back to free public RSS.
+async function getCryptoNews(apiKey) {
+  if (apiKey) {
+    const cp = await safe('cryptopanic', async () => {
+      const url =
+        `https://cryptopanic.com/api/free/v1/posts/?auth_token=${encodeURIComponent(apiKey)}` +
+        '&public=true&filter=hot';
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      return (json.results || []).slice(0, 5).map((p) => p.title);
+    }, []);
+    if (cp && cp.length) return cp;
+  }
+  return safe('public-rss', () => getPublicRssNews(), []);
 }
 
 async function getTrends(config) {
@@ -101,13 +130,13 @@ async function getTrends(config) {
     getCoinGeckoTrending(),
     getFearGreed(),
     getTopMovers(),
-    getCryptoPanicNews(config.cryptoPanicKey),
+    getCryptoNews(config.cryptoPanicKey),
   ]);
   const sources = [
     trending.length && 'coingecko',
     fearGreed && 'fear-greed',
     movers && 'binance-movers',
-    news.length && 'cryptopanic',
+    news.length && 'crypto-news',
   ].filter(Boolean);
   return { trending, fearGreed, movers, news, sources, fetchedAt: new Date().toISOString() };
 }
